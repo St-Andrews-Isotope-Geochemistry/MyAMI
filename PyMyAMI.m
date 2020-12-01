@@ -118,8 +118,10 @@ K.Sal = 0;
 K.Ca = 0;
 K.Mg = 0;
 
-[token, remain] = strtok(result);
+% [token, remain] = strtok(result);
 % '[' parsed away
+
+remain = result;
 
 [token, remain] = strtok(remain);
 K.Ca = str2num(token);
