@@ -88,9 +88,11 @@ classdef MyAMI < handle
             
             calcium_resolution = calcium_unique(2)-calcium_unique(1);
             calcium_range = max(calcium_unique)-min(calcium_unique);
+            calcium_minimum = min(calcium_unique);
             
             magnesium_resolution = magnesium_unique(2)-magnesium_unique(1);
             magnesium_range = max(magnesium_unique)-min(magnesium_unique);
+            magnesium_minimum = min(magnesium_unique);
             
             if mod(calcium,calcium_resolution)==0 && mod(magnesium,magnesium_resolution)==0 % There's an exact result in the spreadsheet
                 index = header_rows+(1+magnesium/magnesium_resolution)+((calcium/calcium_resolution)*(1+magnesium_range/magnesium_resolution));
@@ -109,7 +111,7 @@ classdef MyAMI < handle
                 
                 for calcium_query_index = 1:numel(calcium_query)
                     for magnesium_query_index = 1:numel(magnesium_query)
-                        index = header_rows+(1+magnesium_query(magnesium_query_index)/magnesium_resolution)+((calcium_query(calcium_query_index)/calcium_resolution)*(1+magnesium_range/magnesium_resolution));
+                        index = round(header_rows+(1+(magnesium_query(magnesium_query_index)-magnesium_minimum)/magnesium_resolution)+(((calcium_query(calcium_query_index)-calcium_minimum)/calcium_resolution)*(1+magnesium_range/magnesium_resolution)));
                         raw_coefficients(magnesium_query_index,calcium_query_index,:) = precalculated(index,4:74);
                     end
                 end
