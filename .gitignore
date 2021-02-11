@@ -2,3 +2,4 @@ OUTPUT_INTERACTIVE.txt
 OUTPUT_NONINTERACTIVE.txt
 OUTPUT*
 __pycache__/
+*.asv
