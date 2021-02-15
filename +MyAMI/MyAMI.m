@@ -3,11 +3,36 @@ classdef MyAMI < handle
         precalculated = NaN
         function_handles
         results
+        use_cache
         cache = containers.Map();
+        k_order = ["k0","k1","k2","kb","kw","kc","ka","ks"];
+        method
     end
     methods
-        function self = MyAMI()
-            k_order = ["k0","k1","k2","kb","kw","kc","ka","ks"];
+        function self = MyAMI(method,use_cache,previous_cache)
+            if strcmp(method,"MyAMI")
+                self.method = "MyAMI";
+            elseif strcmp(method,"Precalculated");
+                self.method = "Precalculated";
+            else
+                error("Method unknown");
+            end
+            
+            if nargin>1
+                if use_cache==true
+                    self.use_cache = true;
+                elseif use_cache==false
+                    self.use_cache = false;
+                else
+                    error("Cache must be true or false");
+                end
+            else
+                self.use_cache = true;
+            end
+            
+            if nargin>2
+                self.cache = previous_cache;
+            end
             
             k0_function = @(coefficients,t,s,i) coefficients(1) + (100*coefficients(2))/t + coefficients(3)*log(t/100) + s*(coefficients(4) + (coefficients(5)*t)/100 + coefficients(6)*(t/100)^2);
             k1_function = @(coefficients,t,s,i) log(10^(coefficients(1) + coefficients(2)/t + coefficients(3)*log(t) + coefficients(4)*s + coefficients(5)*s^2));
@@ -20,21 +45,21 @@ classdef MyAMI < handle
             
             k_functions = {k0_function,k1_function,k2_function,kb_function,kw_function,kc_function,ka_function,ks_function};
             
-            self.function_handles = containers.Map(k_order,k_functions);
+            self.function_handles = containers.Map(self.k_order,k_functions);
         end
-        function calculate(self,temperature,salinity,calcium,magnesium,method,cache)
-            if cache && isKey(self.cache,self.getKey(temperature,salinity,calcium,magnesium))
+        function calculate(self,temperature,salinity,calcium,magnesium)
+            if self.use_cache && isKey(self.cache,self.getKey(temperature,salinity,calcium,magnesium))
                 self.results = self.cache(self.getKey(temperature,salinity,calcium,magnesium));
             else
                 if isnan(self.precalculated)
                     self.precalculated = readmatrix(self.getMyAMIPath()+"Precalculated.xls","Range","A:BV");
                 end
-                if strcmp(method,"MyAMI")
+                if strcmp(self.method,"MyAMI")
                     [self.results,~] = self.run(temperature,salinity,calcium,magnesium);
-                elseif strcmp(method,"Precalculated")
+                elseif strcmp(self.method,"Precalculated")
                     self.results = self.fromPrecalculated(temperature,salinity,calcium,magnesium,self.precalculated,self.function_handles);
                 end
-                if cache
+                if self.use_cache
                     self.cache(self.getKey(temperature,salinity,calcium,magnesium)) = self.results;
                 end
             end
@@ -53,7 +78,7 @@ classdef MyAMI < handle
             key = string(temperature)+string(salinity)+string(calcium)+string(magnesium);
 %             key = strrep(initial_key,".","");
         end
-        function [k_values,k_values_correction] = run(temperature,salinity,calcium,magnesium)
+        function [k_values,k_values_correction_output] = run(temperature,salinity,calcium,magnesium)
             command = join(["python",MyAMI.MyAMI.getMyAMIPath()+"/PITZER.py ",temperature,salinity,calcium,magnesium]," ");
             [status,result] = system(command);
             if status==0
@@ -64,8 +89,11 @@ classdef MyAMI < handle
                 output_values = result_values(5:end-1); % Last value unused in the examples...
                 output_matrix = reshape(output_values,[],3);
                 
+                k_order = ["k0","k1","k2","kb","kw","kc","ka","ks"];
                 k_values_correction = output_matrix(:,1)./output_matrix(:,3);
-                k_values = output_matrix(:,2).*k_values_correction;
+                
+                k_values_correction_output = containers.Map(k_order,output_matrix(:,1)./output_matrix(:,3));
+                k_values = containers.Map(k_order,output_matrix(:,2).*k_values_correction);
             else
                 error(join(["Problem running Python:",result]," "));
             end
@@ -96,7 +124,7 @@ classdef MyAMI < handle
             
             if mod(calcium,calcium_resolution)==0 && mod(magnesium,magnesium_resolution)==0 % There's an exact result in the spreadsheet
                 index = header_rows+(1+magnesium/magnesium_resolution)+((calcium/calcium_resolution)*(1+magnesium_range/magnesium_resolution));
-                coefficients = [precalculated(index,4:74),NaN];
+                coefficients = [precalculated(round(index),4:74),NaN];
             else
                 if mod(calcium,calcium_resolution)==0
                     calcium_query = [floor(calcium*1000)/1000,ceil((calcium+1e-6)*1000)/1000];
