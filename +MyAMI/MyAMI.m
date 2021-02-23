@@ -89,7 +89,7 @@ classdef MyAMI < handle
                 output_values = result_values(5:end-1); % Last value unused in the examples...
                 output_matrix = reshape(output_values,[],3);
                 
-                k_order = ["k0","k1","k2","kb","kw","kc","ka","ks"];
+                k_order = ["kw","k1","k2","kc","kb","ka","k0","ks"];
                 k_values_correction = output_matrix(:,1)./output_matrix(:,3);
                 
                 k_values_correction_output = containers.Map(k_order,output_matrix(:,1)./output_matrix(:,3));
