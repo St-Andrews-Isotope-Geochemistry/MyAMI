@@ -7,12 +7,19 @@ classdef MyAMI < handle
         cache = containers.Map();
         k_order = ["k0","k1","k2","kb","kw","kc","ka","ks"];
         method
+        header_rows
+        calcium_resolution
+        calcium_minimum
+        calcium_maximum
+        magnesium_resolution
+        magnesium_minimum
+        magnesium_maximum
     end
     methods
         function self = MyAMI(method,use_cache,previous_cache)
             if strcmp(method,"MyAMI")
                 self.method = "MyAMI";
-            elseif strcmp(method,"Precalculated");
+            elseif strcmp(method,"Precalculated")
                 self.method = "Precalculated";
             else
                 error("Method unknown");
@@ -52,12 +59,12 @@ classdef MyAMI < handle
                 self.results = self.cache(self.getKey(temperature,salinity,calcium,magnesium));
             else
                 if isnan(self.precalculated)
-                    self.precalculated = readmatrix(self.getMyAMIPath()+"Precalculated.xls","Range","A:BV");
+                    self.precalculated = self.parsePrecalculated(self.getPrecalculated());
                 end
                 if strcmp(self.method,"MyAMI")
                     [self.results,~] = self.run(temperature,salinity,calcium,magnesium);
                 elseif strcmp(self.method,"Precalculated")
-                    self.results = self.fromPrecalculated(temperature,salinity,calcium,magnesium,self.precalculated,self.function_handles);
+                    self.results = self.fromPrecalculated(temperature,salinity,calcium,magnesium,self.precalculated,self.function_handles,[self.calcium_minimum,self.calcium_maximum,self.calcium_resolution],[self.magnesium_minimum,self.magnesium_maximum,self.magnesium_resolution]);
                 end
                 if self.use_cache
                     self.cache(self.getKey(temperature,salinity,calcium,magnesium)) = self.results;
@@ -66,6 +73,32 @@ classdef MyAMI < handle
         end
         function clear(self)
             self.results = NaN;
+        end
+        function precalculated = getPrecalculated(self)
+            precalculated = readmatrix(self.getMyAMIPath()+"Precalculated.xls","Range","A:BV");
+        end
+        function precalculated_reshaped = parsePrecalculated(self,precalculated)
+            if nargin<2 || (numel(precalculated)==1 && isnan(precalculated))
+                precalculated = self.getPrecalculated();
+            end
+            calcium_magnesium = precalculated(:,1:2);
+            self.header_rows = sum(isnan(calcium_magnesium(:,1)));
+            
+            calcium_known = calcium_magnesium(self.header_rows+1:end,1);
+            magnesium_known = calcium_magnesium(self.header_rows+1:end,2);
+            
+            calcium_unique = unique(calcium_known);
+            magnesium_unique = unique(magnesium_known);
+            
+            self.calcium_resolution = calcium_unique(2)-calcium_unique(1);
+            self.calcium_minimum = min(calcium_unique);
+            self.calcium_maximum = max(calcium_unique);
+            
+            self.magnesium_resolution = magnesium_unique(2)-magnesium_unique(1);
+            self.magnesium_minimum = min(magnesium_unique);
+            self.magnesium_maximum = max(magnesium_unique);
+            
+            precalculated_reshaped = permute(reshape(precalculated(self.header_rows+1:end,:),numel(calcium_unique),numel(magnesium_unique),[]),[2,1,3]);
         end
     end
     methods (Static=true)
@@ -76,7 +109,6 @@ classdef MyAMI < handle
         end
         function key = getKey(temperature,salinity,calcium,magnesium)
             key = string(temperature)+string(salinity)+string(calcium)+string(magnesium);
-%             key = strrep(initial_key,".","");
         end
         function [k_values,k_values_correction_output] = run(temperature,salinity,calcium,magnesium)
             command = join(["python",MyAMI.MyAMI.getMyAMIPath()+"/PITZER.py ",temperature,salinity,calcium,magnesium]," ");
@@ -98,33 +130,43 @@ classdef MyAMI < handle
                 error(join(["Problem running Python:",result]," "));
             end
         end
-        function [k_values] = fromPrecalculated(temperature,salinity,calcium,magnesium,precalculated,functions)
+        function [k_values] = fromPrecalculated(temperature,salinity,calcium,magnesium,precalculated,functions,calcium_information,magnesium_information)
             if isstring(precalculated)
-                precalculated = readmatrix(precalculated,"Range","A:BV");
+                raw_precalculated = readmatrix(precalculated,"Range","A:BV");
+            
+                calcium_magnesium = raw_precalculated(:,1:2);
+                self.header_rows = sum(isnan(calcium_magnesium(:,1)));
+                
+                calcium_known = calcium_magnesium(self.header_rows+1:end,1);
+                magnesium_known = calcium_magnesium(self.header_rows+1:end,2);
+                
+                calcium_unique = unique(calcium_known);
+                magnesium_unique = unique(magnesium_known);
+                
+                calcium_minimum = min(calcium_unique);
+                calcium_maximum = max(calcium_unique);
+                calcium_resolution = calcium_unique(2)-calcium_unique(1);
+                
+                magnesium_minimum = min(magnesium_unique);
+                magnesium_maximum = max(magnesium_unique);
+                magnesium_resolution = magnesium_unique(2)-magnesium_unique(1);
+                
+                precalculated = reshape(raw_precalculated(self.header_rows+1:end,:),numel(calcium_unique),numel(magnesium_unique),[]);
+            else
+                calcium_minimum = calcium_information(1);
+                calcium_maximum = calcium_information(2);
+                calcium_resolution = calcium_information(3);
+                
+                magnesium_minimum = magnesium_information(1);
+                magnesium_maximum =  magnesium_information(2);
+                magnesium_resolution = magnesium_information(3);
             end
             
             ionic_strength = (19.924*salinity)/(1000-1.005*salinity);
             
-            calcium_magnesium = precalculated(:,1:2);
-            header_rows = sum(isnan(calcium_magnesium(:,1)));
-            
-            calcium_known = calcium_magnesium(header_rows+1:end,1);
-            magnesium_known = calcium_magnesium(header_rows+1:end,2);
-            
-            calcium_unique = unique(calcium_known);
-            magnesium_unique = unique(magnesium_known);
-            
-            calcium_resolution = calcium_unique(2)-calcium_unique(1);
-            calcium_range = max(calcium_unique)-min(calcium_unique);
-            calcium_minimum = min(calcium_unique);
-            
-            magnesium_resolution = magnesium_unique(2)-magnesium_unique(1);
-            magnesium_range = max(magnesium_unique)-min(magnesium_unique);
-            magnesium_minimum = min(magnesium_unique);
-            
             if mod(calcium,calcium_resolution)==0 && mod(magnesium,magnesium_resolution)==0 % There's an exact result in the spreadsheet
-                index = header_rows+(1+magnesium/magnesium_resolution)+((calcium/calcium_resolution)*(1+magnesium_range/magnesium_resolution));
-                coefficients = [precalculated(round(index),4:74),NaN];
+                index = round([1+((calcium-calcium_minimum)/calcium_resolution),1+((magnesium-magnesium_minimum)/magnesium_resolution)]);
+                coefficients = [squeeze(precalculated(index(1),index(2),4:74))',NaN];
             else
                 if mod(calcium,calcium_resolution)==0
                     calcium_query = [floor(calcium*1000)/1000,ceil((calcium+1e-6)*1000)/1000];
@@ -137,17 +179,19 @@ classdef MyAMI < handle
                     magnesium_query = [floor(magnesium*1000)/1000,ceil(magnesium*1000)/1000];
                 end
                 
+                raw_coefficients = NaN(2,2,1+74-4);
                 for calcium_query_index = 1:numel(calcium_query)
                     for magnesium_query_index = 1:numel(magnesium_query)
-                        index = round(header_rows+(1+(magnesium_query(magnesium_query_index)-magnesium_minimum)/magnesium_resolution)+(((calcium_query(calcium_query_index)-calcium_minimum)/calcium_resolution)*(1+magnesium_range/magnesium_resolution)));
-                        raw_coefficients(magnesium_query_index,calcium_query_index,:) = precalculated(index,4:74);
+                        index = round([1+((calcium_query(calcium_query_index)-calcium_minimum)/calcium_resolution),1+((magnesium_query(magnesium_query_index)-magnesium_minimum)/magnesium_resolution)]);
+                        raw_coefficients(calcium_query_index,magnesium_query_index,:) = precalculated(index(1),index(2),4:74);
                     end
                 end
                 
+                interpolated_coefficients = NaN(2+74-4,1);
                 for coefficient_index = 1:size(raw_coefficients,3)
                     interpolated_coefficients(coefficient_index) = 1/((calcium_query(2)-calcium_query(1))*(magnesium_query(2)-magnesium_query(1))) * [calcium_query(2)-calcium,calcium-calcium_query(1)] * raw_coefficients(:,:,coefficient_index) * [magnesium_query(2)-magnesium;magnesium-magnesium_query(1)];
                 end
-                coefficients = [interpolated_coefficients,NaN];
+                coefficients = interpolated_coefficients;
             end
             coefficient_map = containers.Map();
             k_order = ["k0","k1","k2","kb","kw","kc","ka","ks"];
