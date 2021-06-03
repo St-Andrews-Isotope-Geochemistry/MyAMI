@@ -100,17 +100,7 @@ classdef MyAMI < handle
             
             precalculated_reshaped = permute(reshape(precalculated(self.header_rows+1:end,:),numel(calcium_unique),numel(magnesium_unique),[]),[2,1,3]);
         end
-    end
-    methods (Static=true)
-        function MyAMI_path = getMyAMIPath()
-            MyAMI_search = what("+MyAMI");
-            current_directory = pwd; 
-            MyAMI_path = strrep(strrep(strrep(join([MyAMI_search(1).path],""),current_directory,"."),"\","/"),"+MyAMI","");
-        end
-        function key = getKey(temperature,salinity,calcium,magnesium)
-            key = string(temperature)+string(salinity)+string(calcium)+string(magnesium);
-        end
-        function [k_values,k_values_correction_output] = run(temperature,salinity,calcium,magnesium)
+        function [k_values,k_values_correction_output] = run(self,temperature,salinity,calcium,magnesium)
             command = join(["python",MyAMI.MyAMI.getMyAMIPath()+"/PITZER.py ",temperature,salinity,calcium,magnesium]," ");
             [status,result] = system(command);
             if status==0
@@ -130,7 +120,7 @@ classdef MyAMI < handle
                 error(join(["Problem running Python:",result]," "));
             end
         end
-        function [k_values] = fromPrecalculated(temperature,salinity,calcium,magnesium,precalculated,functions,calcium_information,magnesium_information)
+        function [k_values] = fromPrecalculated(self,temperature,salinity,calcium,magnesium,precalculated,functions,calcium_information,magnesium_information)
             if isstring(precalculated)
                 raw_precalculated = readmatrix(precalculated,"Range","A:BV");
             
@@ -164,32 +154,111 @@ classdef MyAMI < handle
             
             ionic_strength = (19.924*salinity)/(1000-1.005*salinity);
             
-            if mod(calcium,calcium_resolution)==0 && mod(magnesium,magnesium_resolution)==0 % There's an exact result in the spreadsheet
-                index = round([1+((calcium-calcium_minimum)/calcium_resolution),1+((magnesium-magnesium_minimum)/magnesium_resolution)]);
-                coefficients = [squeeze(precalculated(index(1),index(2),4:74))',NaN];
-            else
-                if mod(calcium,calcium_resolution)==0
-                    calcium_query = [floor(calcium*1000)/1000,ceil((calcium+1e-6)*1000)/1000];
-                    magnesium_query = [floor(magnesium*1000)/1000,ceil(magnesium*1000)/1000];
-                elseif mod(magnesium,magnesium_resolution)==0
-                    calcium_query = [floor(calcium*1000)/1000,ceil(calcium*1000)/1000];
-                    magnesium_query = [floor(magnesium*1000)/1000,ceil((magnesium+1e-6)*1000)/1000];
-                else
-                    calcium_query = [floor(calcium*1000)/1000,ceil(calcium*1000)/1000];
-                    magnesium_query = [floor(magnesium*1000)/1000,ceil(magnesium*1000)/1000];
-                end
-                
-                raw_coefficients = NaN(2,2,1+74-4);
-                for calcium_query_index = 1:numel(calcium_query)
-                    for magnesium_query_index = 1:numel(magnesium_query)
-                        index = round([1+((calcium_query(calcium_query_index)-calcium_minimum)/calcium_resolution),1+((magnesium_query(magnesium_query_index)-magnesium_minimum)/magnesium_resolution)]);
-                        raw_coefficients(calcium_query_index,magnesium_query_index,:) = precalculated(index(1),index(2),4:74);
+            if calcium>=calcium_minimum && calcium<=calcium_maximum && magnesium>=magnesium_minimum && magnesium<=magnesium_maximum % Interpolate
+                if mod(calcium,calcium_resolution)==0 && mod(magnesium,magnesium_resolution)==0 % There's an exact result in the spreadsheet
+                    index = round([1+((calcium-calcium_minimum)/calcium_resolution),1+((magnesium-magnesium_minimum)/magnesium_resolution)]);
+                    coefficients = [squeeze(precalculated(index(1),index(2),4:74))',NaN];
+                else % No exact match
+                    if mod(calcium,calcium_resolution)==0 % Calcium match but no magnesium match
+                        magnesium_query = [floor(magnesium*1000)/1000,ceil(magnesium*1000)/1000];
+                        
+                        raw_coefficients = NaN(1,2,1+74-4);
+                        for magnesium_query_index = 1:numel(magnesium_query)
+                            index = round([1+((calcium-calcium_minimum)/calcium_resolution),1+((magnesium_query(magnesium_query_index)-magnesium_minimum)/magnesium_resolution)]);
+                            raw_coefficients(1,magnesium_query_index,:) = precalculated(index(1),index(2),4:74);
+                        end                        
+                        
+                        interpolated_coefficients = NaN(2+74-4,1);
+                        for coefficient_index = 1:size(raw_coefficients,3)
+                            interpolated_coefficients(coefficient_index) = self.linearEstimate(magnesium_query,raw_coefficients(:,:,coefficient_index),magnesium);
+                        end
+                    elseif mod(magnesium,magnesium_resolution)==0 % Magnesium match but not calcium match
+                        calcium_query = [floor(calcium*1000)/1000,ceil(calcium*1000)/1000];
+                        
+                        raw_coefficients = NaN(2,1,1+74-4);
+                        for calcium_query_index = 1:numel(calcium_query)
+                            index = round([1+((calcium_query(calcium_query_index)-calcium_minimum)/calcium_resolution),1+((magnesium-magnesium_minimum)/magnesium_resolution)]);
+                            raw_coefficients(calcium_query_index,1,:) = precalculated(index(1),index(2),4:74);
+                        end
+                        
+                        interpolated_coefficients = NaN(2+74-4,1);
+                        for coefficient_index = 1:size(raw_coefficients,3)
+                            interpolated_coefficients(coefficient_index) = self.linearEstimate(calcium_query,raw_coefficients(:,:,coefficient_index)',calcium);
+                        end                        
+                    else
+                        calcium_query = [floor(calcium*1000)/1000,ceil(calcium*1000)/1000];
+                        magnesium_query = [floor(magnesium*1000)/1000,ceil(magnesium*1000)/1000];
+                        
+                        raw_coefficients = NaN(2,2,1+74-4);
+                        for calcium_query_index = 1:numel(calcium_query)
+                            for magnesium_query_index = 1:numel(magnesium_query)
+                                index = round([1+((calcium_query(calcium_query_index)-calcium_minimum)/calcium_resolution),1+((magnesium_query(magnesium_query_index)-magnesium_minimum)/magnesium_resolution)]);
+                                raw_coefficients(calcium_query_index,magnesium_query_index,:) = precalculated(index(1),index(2),4:74);
+                            end
+                        end
+                        
+                        interpolated_coefficients = NaN(2+74-4,1);
+                        for coefficient_index = 1:size(raw_coefficients,3)
+                            interpolated_coefficients(coefficient_index) = 1/((calcium_query(2)-calcium_query(1))*(magnesium_query(2)-magnesium_query(1))) * [calcium_query(2)-calcium,calcium-calcium_query(1)] * raw_coefficients(:,:,coefficient_index) * [magnesium_query(2)-magnesium;magnesium-magnesium_query(1)];
+                        end
                     end
+                    coefficients = interpolated_coefficients;
                 end
-                
-                interpolated_coefficients = NaN(2+74-4,1);
-                for coefficient_index = 1:size(raw_coefficients,3)
-                    interpolated_coefficients(coefficient_index) = 1/((calcium_query(2)-calcium_query(1))*(magnesium_query(2)-magnesium_query(1))) * [calcium_query(2)-calcium,calcium-calcium_query(1)] * raw_coefficients(:,:,coefficient_index) * [magnesium_query(2)-magnesium;magnesium-magnesium_query(1)];
+            else % Extrapolate
+                if calcium>=calcium_minimum && calcium<=calcium_maximum
+                    magnesium_query = [magnesium_maximum-magnesium_resolution,magnesium_maximum];
+                    if mod(calcium,calcium_resolution)==0
+                        for calcium_query_index = 1:numel(calcium_query)
+                            for magnesium_query_index = 1:numel(magnesium_query)
+                                index = round([1+((calcium-calcium_minimum)/calcium_resolution),1+((magnesium_query(magnesium_query_index)-magnesium_minimum)/magnesium_resolution)]);
+                                raw_coefficients(calcium_query_index,magnesium_query_index,:) = precalculated(index(1),index(2),4:74);
+                            end
+                        end
+                        
+                        interpolated_coefficients = NaN(2+74-4,1);
+                        for coefficient_index = 1:size(raw_coefficients,3)
+                            interpolated_coefficients(coefficient_index) = 1/((calcium_query(2)-calcium_query(1))*(magnesium_query(2)-magnesium_query(1))) * [calcium_query(2)-calcium,calcium-calcium_query(1)] * raw_coefficients(:,:,coefficient_index) * [magnesium_query(2)-magnesium;magnesium-magnesium_query(1)];
+                        end
+                    else
+                        calcium_query = [floor(calcium*1000)/1000,ceil(calcium*1000)/1000];
+                        for calcium_query_index = 1:numel(calcium_query)
+                            for magnesium_query_index = 1:numel(magnesium_query)
+                                index = round([1+((calcium_query(calcium_query_index)-calcium_minimum)/calcium_resolution),1+((magnesium_query(magnesium_query_index)-magnesium_minimum)/magnesium_resolution)]);
+                                raw_coefficients(calcium_query_index,magnesium_query_index,:) = precalculated(index(1),index(2),4:74);
+                            end
+                        end
+                        
+                        interpolated_coefficients = NaN(2+74-4,1);
+                        for coefficient_index = 1:size(raw_coefficients,3)
+                            interpolated_coefficients(coefficient_index) = 1/((calcium_query(2)-calcium_query(1))*(magnesium_query(2)-magnesium_query(1))) * [calcium_query(2)-calcium,calcium-calcium_query(1)] * raw_coefficients(:,:,coefficient_index) * [magnesium_query(2)-magnesium;magnesium-magnesium_query(1)];
+                        end
+                    end
+                elseif magnesium>=magnesium_minimum && magnesium<=magnesium_maximum
+                    calcium_query = [calcium_maximum-calcium_resolution,calcium_maximum];
+                    if mod(magnesium,magnesium_resolution)==0
+                        for calcium_query_index = 1:numel(calcium_query)
+                            index = round([1+((calcium_query(calcium_query_index)-calcium_minimum)/calcium_resolution),1+((magnesium-magnesium_minimum)/magnesium_resolution)]);
+                            raw_coefficients(calcium_query_index,magnesium_query_index,:) = precalculated(index(1),index(2),4:74);
+                        end
+                        
+                        interpolated_coefficients = NaN(2+74-4,1);
+                        for coefficient_index = 1:size(raw_coefficients,3)
+                            interpolated_coefficients(coefficient_index) = 1/((calcium_query(2)-calcium_query(1))*(magnesium_query(2)-magnesium_query(1))) * [calcium_query(2)-calcium,calcium-calcium_query(1)] * raw_coefficients(:,:,coefficient_index) * [magnesium_query(2)-magnesium;magnesium-magnesium_query(1)];
+                        end
+                    else
+                        magnesium_query = [floor(magnesium*1000)/1000,ceil(magnesium*1000)/1000];
+                        for calcium_query_index = 1:numel(calcium_query)
+                            for magnesium_query_index = 1:numel(magnesium_query)
+                                index = round([1+((calcium_query(calcium_query_index)-calcium_minimum)/calcium_resolution),1+((magnesium_query(magnesium_query_index)-magnesium_minimum)/magnesium_resolution)]);
+                                raw_coefficients(calcium_query_index,magnesium_query_index,:) = precalculated(index(1),index(2),4:74);
+                            end
+                        end
+                        
+                        interpolated_coefficients = NaN(2+74-4,1);
+                        for coefficient_index = 1:size(raw_coefficients,3)
+                            interpolated_coefficients(coefficient_index) = 1/((calcium_query(2)-calcium_query(1))*(magnesium_query(2)-magnesium_query(1))) * [calcium_query(2)-calcium,calcium-calcium_query(1)] * raw_coefficients(:,:,coefficient_index) * [magnesium_query(2)-magnesium;magnesium-magnesium_query(1)];
+                        end
+                    end
                 end
                 coefficients = interpolated_coefficients;
             end
@@ -213,6 +282,23 @@ classdef MyAMI < handle
                 output_map(ck) = exp(current_function(coefficient_map(ck),temperature+273.15,salinity,ionic_strength));
             end
             k_values = output_map;
+        end
+        
+    end
+    methods (Static=true)
+        function MyAMI_path = getMyAMIPath()
+            MyAMI_search = what("+MyAMI");
+            current_directory = pwd; 
+            MyAMI_path = strrep(strrep(strrep(join([MyAMI_search(1).path],""),current_directory,"."),"\","/"),"+MyAMI","");
+        end
+        function key = getKey(temperature,salinity,calcium,magnesium)
+            key = string(temperature)+string(salinity)+string(calcium)+string(magnesium);
+        end
+        function estimate = linearEstimate(boundaries,to_interpolate,value)
+            assert(numel(boundaries)==2,"Must be 2 boundaries");
+            assert(size(to_interpolate,2)==2,"Matrix to interpolate must be n x 2 x m");
+            assert(numel(size(to_interpolate))<=2,"Matrix to interpolate must be 1D or 2D");
+            estimate = (1/(boundaries(2)-boundaries(1))).*([boundaries(2)-value,value-boundaries(1)]*to_interpolate')';
         end
     end
 end
